@@ -3,38 +3,36 @@ import threading
 import pickle
 import io
 import queue
+import struct
 
-
-host = '0.0.0.0'      
-port = 9090
+host = '0.0.0.0' 
+port = 9090  
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server_socket.bind((host, port))
 server_socket.listen()
-tot_len=100902900
+tot_len=60720
+
 def recivstatus(c_socket,rq):
-    
-    blen=0
-    tot_data=b''
     while 1:
+        blen=0
+        tot_data=b''
+        tot_len=c_socket.recv(4)
+        tot_len=struct.unpack('!I', tot_len)[0]
+        print(tot_len)
         while (tot_len-blen>0):
             data = c_socket.recv(tot_len)
             blen+=len(data)
             tot_data+=data
-        print('r')
-        blen=0
-        n=tot_data.rfind(b'susb.')
-        tot_data= tot_data[:n+5]
-        tot_data=tot_data
-        result = pickle.Unpickler(io.BytesIO(tot_data)).load()
+        result =  pickle.Unpickler(io.BytesIO(tot_data)).load()
         rq.put(result)
 
 def mean(rq):
     f=rq.get()
     s=rq.get()
-    result=f
-    for k in f:
-        result[k]=(f[k]+s[k])/2.0
+    result = f.copy()
+    for key in f.copy().keys():
+        result[key] = (f[key] + s[key]) / 2.0
     return result
 
 def sendstatus(group, rq):
@@ -44,9 +42,8 @@ def sendstatus(group, rq):
             mean_dict=mean(rq)
             dict_byte=pickle.dumps(mean_dict)
             dict_byte=bytearray(dict_byte)
-            for no in range(tot_len-len(pickle.dumps(mean_dict))):
-                dict_byte.append(0)
             for i in group:
+                i.sendall(struct.pack('!I', len(dict_byte)))
                 i.sendall(dict_byte)
 
 rq=queue.Queue(2)
@@ -62,6 +59,5 @@ while 1:
     tre.start()
     tse=threading.Thread(target=sendstatus, args=(group, rq,))
     tse.start()
-
 
 server_socket.close()
