@@ -1,39 +1,35 @@
-import torchvision
+
 import torch
-import torch.nn as nn
-import torch.optim as optim
+import torchvision
 import torchvision.transforms as transforms
-import torch.nn.init
-import io
-import struct
-import time
+from torchvision.utils import save_image
+import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
 import numpy as np
+from torch.utils import data as D
 from torch.utils.data.sampler import SubsetRandomSampler
+import time
 import io
 import pickle
 import socket
-import random
-from resnet import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
-host = '210.110.39.84' 
+import struct
+
+
+
+print(torch.__version__)
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+print(device)
+host = '파라미터 서버 ip' 
 port = 9090  
 csocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 csocket.connect((host, port))
-
-print("연결된거같음")
-
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print(device)
-
-
-
-
 
 batch_size = 64
 validation_ratio = 0.1
 random_seed = 10
 initial_lr = 0.1
-num_epoch = 300
+num_epoch = 180
 
 transform_train = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
@@ -60,6 +56,7 @@ testset = torchvision.datasets.CIFAR10(
     root='./data', train=False, download=True, transform=transform_test)
 totlen=len(trainset)
 ##################################################################################
+#워커노드는 각각 학습 데이터의 절반을 갖고 학습을 진행한다
 n_samples = len(trainset)
 
 # 데이터셋 인덱스를 랜덤하게 섞기
@@ -73,7 +70,6 @@ train_idx = indices[:split_idx]
 
 # 각각의 데이터셋 생성
 trainset = torch.utils.data.Subset(trainset, train_idx)
-
 ##################################################################################
 nowlen=len(trainset)
 num_train = len(trainset)
@@ -200,34 +196,30 @@ class DenseNet(nn.Module):
         
         return output
      
-
 def DenseNetBC_100_12():
     return DenseNet(growth_rate=12, num_layers=100, theta=0.5, drop_rate=0.2, num_classes=10)
 
-
 net = DenseNetBC_100_12()
 
-def sendstatus(dict):
-    dict_byte=pickle.dumps(dict)
+def sendstatus(csocket,dict):
+    dict_byte=pickle.dumps(dict)#현재 모델의 파라미터를 딕셔너리->바이트로 직렬화
     dict_byte=bytearray(dict_byte)
-    csocket.sendall(struct.pack('!I', len(dict_byte)))
-    csocket.sendall(dict_byte)
-
+    csocket.sendall(struct.pack('!I', len(dict_byte)))#첫 4바이트는 파라미터의 길이를 뜻한다
+    csocket.sendall(dict_byte)#파라미터 정보 전송
 
 def recivstatus(c_socket):
     blen=0
     tot_data=b''
-    tot_len=c_socket.recv(4)
+    tot_len=c_socket.recv(4)#첫 4바이트는 파라미터의 길이를 뜻한다
     tot_len=struct.unpack('!I', tot_len)[0]
     while (tot_len-blen>0):
         data = c_socket.recv(tot_len)
         blen+=len(data)
         tot_data+=data
-    result =  pickle.Unpickler(io.BytesIO(tot_data)).load()
-    return result     
+    result =  pickle.Unpickler(io.BytesIO(tot_data)).load()#파라미터를 다시 딕셔너리로 변환해서 반환한다
+    return result 
 
 net.to(device)
-
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=initial_lr, momentum=0.9)
 lr_scheduler = optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=[int(num_epoch * 0.5), int(num_epoch * 0.75)], gamma=0.1, last_epoch=-1)
@@ -242,7 +234,7 @@ def train():
         for i, data in enumerate(train_loader, 0):
             inputs, labels = data
             inputs, labels = inputs.to(device), labels.to(device)
-
+            
             optimizer.zero_grad()
 
             outputs = net(inputs)
@@ -257,9 +249,6 @@ def train():
                 print('[%d, %5d/%d] loss: %.7f' %
                     (epoch + 1, (i + 1)*batch_size, len(trainset), running_loss / show_period))
                 running_loss = 0.0
-        sendstatus(net.state_dict())
-        data=recivstatus(csocket)
-        net.load_state_dict(data)
 
         # validation part
         val_loss = 0
@@ -283,19 +272,21 @@ def train():
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             epochs_no_improve = 0
-            torch.save(net.state_dict(), 'densenet.pt')
+            torch.save(net.state_dict(), 'densenet2.pt')
         else:
             epochs_no_improve += 1
             if epochs_no_improve == patience:
                 print("Early stopping.")
                 break
+        sendstatus(csocket,net.state_dict())#파라미터 전송
+        data=recivstatus(csocket)#파라미터 수신
+        net.load_state_dict(data)#업데이트된 파라미터 적용
     print('Finished Training')
-
+    
 start = time.time()
 train ()
 sectime=time.time() - start
-print("time :", sectime)  # 현재시각 - 시작시간 = 실행 시간
-
+print(sectime)
 class_correct = list(0. for i in range(10))
 class_total = list(0. for i in range(10))
 
@@ -324,8 +315,3 @@ print('Accuracy of the network on the 10000 test images: %d %%' % (
 for i in range(10):
     print('Accuracy of %5s : %2d %%' % (
         classes[i], 100 * class_correct[i] / class_total[i]))
-
-
-
-
-csocket.close()

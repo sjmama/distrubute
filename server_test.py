@@ -13,7 +13,7 @@ server_socket.bind((host, port))
 server_socket.listen()
 tot_len=60720
 
-def recivstatus(c_socket,rq):
+def recivstatus(c_socket,rq): #워커노드로부터 파라미터를 수신하는 함수
     while 1:
         blen=0
         tot_data=b''
@@ -27,7 +27,7 @@ def recivstatus(c_socket,rq):
         result =  pickle.Unpickler(io.BytesIO(tot_data)).load()
         rq.put(result)
 
-def mean(rq):
+def mean(rq):#수신 받은 파라미터를 키맞춰서 평균 연산
     f=rq.get()
     s=rq.get()
     result = f.copy()
@@ -35,7 +35,7 @@ def mean(rq):
         result[key] = (f[key] + s[key]) / 2.0
     return result
 
-def sendstatus(group, rq):
+def sendstatus(group, rq):#워커노드 두개의 파라미터가 전부 준비되면 워커노드에게 파라미터 전송
     while 1:
         if rq.qsize()==2:
             print('s')
@@ -51,13 +51,13 @@ flag=queue.Queue(2)
 group=[]
 
 while 1:
-    c_socket, addr = server_socket.accept()
-    group.append(c_socket)
+    c_socket, addr = server_socket.accept()#워커노드 접속
+    group.append(c_socket)#워커노드 큐를 구성한다
     print('conn')
     print('connected client addr:', addr)
-    tre=threading.Thread(target=recivstatus, args=(c_socket,rq,))
+    tre=threading.Thread(target=recivstatus, args=(c_socket,rq,))#수신부분 스레드화
     tre.start()
-    tse=threading.Thread(target=sendstatus, args=(group, rq,))
+    tse=threading.Thread(target=sendstatus, args=(group, rq,))#송신부분 스레드화
     tse.start()
 
 server_socket.close()
